@@ -19,10 +19,11 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 FACESWAP_API_KEY = os.environ.get("FACESWAP_API_KEY")
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
 
-# API URLs
-FACESWAP_SUBMIT_URL = "https://api.market/api/faceswap/image/run"
-FACESWAP_STATUS_URL = "https://api.market/api/faceswap/image/status"
+# CORRECT API URLs
+FACESWAP_SUBMIT_URL = "https://api.magicapi.dev/api/v1/magicapi/faceswap-v2/faceswap/image/run"
+FACESWAP_STATUS_URL = "https://api.magicapi.dev/api/v1/magicapi/faceswap-v2/faceswap/image/status"
 IMGBB_UPLOAD_URL = "https://api.imgbb.com/1/upload"
+
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
@@ -77,10 +78,8 @@ async def upload_image_to_imgbb(image_data: bytes) -> str:
 async def submit_faceswap_job(swap_image_url: str, target_image_url: str) -> str:
     """Submit face swap job and return job ID."""
     try:
-        # Log the API key (first 10 characters only for security)
-        logger.info(f"Using API key: {FACESWAP_API_KEY[:10]}...")
-        
         headers = {
+            'accept': 'application/json',
             'x-magicapi-key': FACESWAP_API_KEY,
             'Content-Type': 'application/json'
         }
@@ -93,33 +92,59 @@ async def submit_faceswap_job(swap_image_url: str, target_image_url: str) -> str
         }
         
         logger.info(f"Submitting to URL: {FACESWAP_SUBMIT_URL}")
-        logger.info(f"Headers: {headers}")
         logger.info(f"Payload: {payload}")
         
         response = requests.post(FACESWAP_SUBMIT_URL, headers=headers, json=payload, timeout=30)
         
         logger.info(f"Submit API Response Status: {response.status_code}")
-        logger.info(f"Submit API Response Headers: {dict(response.headers)}")
         logger.info(f"Submit API Response Body: {response.text}")
         
         if response.status_code == 200:
-            try:
-                result = response.json()
-                job_id = result.get('id')
-                if job_id:
-                    logger.info(f"Job submitted successfully with ID: {job_id}")
-                    return job_id
-                else:
-                    logger.error(f"No job ID in response: {result}")
-                    return None
-            except Exception as json_error:
-                logger.error(f"Failed to parse JSON response: {json_error}")
-                logger.error(f"Raw response: {response.text}")
+            result = response.json()
+            job_id = result.get('id')
+            if job_id:
+                logger.info(f"Job submitted successfully with ID: {job_id}")
+                return job_id
+            else:
+                logger.error(f"No job ID in response: {result}")
                 return None
         else:
             logger.error(f"API returned error status {response.status_code}")
             logger.error(f"Error response: {response.text}")
             return None
+            
+    except Exception as e:
+        logger.error(f"Error submitting face swap job: {e}")
+        return None
+
+
+async def check_faceswap_status(job_id: str) -> dict:
+    """Check the status of a face swap job."""
+    try:
+        headers = {
+            'accept': 'application/json',
+            'x-magicapi-key': FACESWAP_API_KEY
+        }
+        
+        url = f"{FACESWAP_STATUS_URL}/{job_id}"
+        logger.info(f"Checking status at: {url}")
+        
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        logger.info(f"Status check for {job_id}: {response.status_code}")
+        logger.info(f"Status response: {response.text}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result
+        else:
+            logger.error(f"Failed to check status: {response.status_code} - {response.text}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error checking job status: {e}")
+        return None
+
             
     except requests.exceptions.Timeout:
         logger.error("Request timed out")
