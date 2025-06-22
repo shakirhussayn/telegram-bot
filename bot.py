@@ -1,6 +1,8 @@
 import os
 import logging
 import requests
+import base64
+from io import BytesIO
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -11,136 +13,252 @@ from telegram.ext import (
     filters,
 )
 
-# --- CONFIGURATION: READ KEYS FROM THE ENVIRONMENT ---
-# This correctly reads the secret keys you set in the Railway "Variables" tab.
+# --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 FACESWAP_API_KEY = os.environ.get("FACESWAP_API_KEY")
 
-# --- API URL ---
-# The final, correct URL based on the API Playground documentation you found.
-FACESWAP_API_URL = "https://api.market/api/faceswap/v2/image/run"
+# Updated API URL - check the actual documentation
+FACESWAP_API_URL = "https://api.market/store/magicapi/faceswap-v2"
 
-# --- BOT SETUP ---
-# Standard logging setup to see bot activity.
+# --- LOGGING SETUP ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Define the states for our conversation.
+# Conversation states
 WAITING_FOR_SOURCE_IMAGE, WAITING_FOR_TARGET_IMAGE = range(2)
 
 
-# --- BOT FUNCTIONS ---
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the conversation when the user sends /swap."""
+    """Starts the face swap conversation."""
     await update.message.reply_text(
-        "👋 Welcome! Let's swap some faces.\n\n"
-        "First, please send the **SOURCE image** (the one with the face you want to USE)."
+        "👋 Welcome to FaceSwap Bot!\n\n"
+        "First, send the **SOURCE image** (the face you want to use for swapping).\n"
+        "Make sure the face is clearly visible! 📸"
     )
     return WAITING_FOR_SOURCE_IMAGE
 
 
 async def received_source_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles the first image and asks for the second."""
-    context.user_data['source_file_id'] = update.message.photo[-1].file_id
-    logger.info(f"User {update.effective_user.id} provided source image.")
-    await update.message.reply_text(
-        "👍 Got it! Now, please send the **TARGET image** (the one you want the face put onto)."
-    )
-    return WAITING_FOR_TARGET_IMAGE
+    """Handles the source image."""
+    try:
+        # Get the highest resolution photo
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        
+        # Download the image data
+        image_data = await file.download_as_bytearray()
+        
+        # Store in user context
+        context.user_data['source_image'] = image_data
+        
+        logger.info(f"User {update.effective_user.id} provided source image.")
+        await update.message.reply_text(
+            "✅ Source image received!\n\n"
+            "Now send the **TARGET image** (where you want to place the face)."
+        )
+        return WAITING_FOR_TARGET_IMAGE
+        
+    except Exception as e:
+        logger.error(f"Error processing source image: {e}")
+        await update.message.reply_text(
+            "❌ Error processing the image. Please try again with a different image."
+        )
+        return WAITING_FOR_SOURCE_IMAGE
 
 
 async def received_target_image_and_swap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles the second image, calls the API, and returns the result."""
+    """Handles the target image and performs face swap."""
     user = update.message.from_user
-    await update.message.reply_text("⏳ Processing... Please wait a moment while the magic happens!")
+    
+    # Send processing message
+    processing_msg = await update.message.reply_text(
+        "⏳ Processing your face swap... This may take a few moments!"
+    )
+    
     try:
-        # Get the file objects first.
-        source_file = await context.bot.get_file(context.user_data['source_file_id'])
-        target_file = await update.message.photo[-1].get_file()
-
-        # The `file_path` attribute provides a full, temporary URL accessible by external services.
-        source_image_url = source_file.file_path
-        target_image_url = target_file.file_path
-
-        logger.info(f"User {user.id}: Calling the FaceSwap API with public URLs.")
+        # Get target image
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        target_image_data = await file.download_as_bytearray()
         
-        # Prepare the request for the face swap service.
-        headers = {'x-magicapi-key': FACESWAP_API_KEY}
-        data = {'swap_url': source_image_url, 'target_url': target_image_url}
-
-        # Make the API call.
-        response = requests.post(FACESWAP_API_URL, headers=headers, data=data)
-        response.raise_for_status()  # Checks for HTTP errors like 4xx or 5xx.
-
-        api_result = response.json()
-
-        # Process the API response and send the final image back.
-        if response.status_code == 200 and api_result.get('new_image_url'):
-            result_image_url = api_result['new_image_url']
-            logger.info(f"User {user.id}: Success! Sending the final image.")
+        logger.info(f"User {user.id}: Starting face swap process.")
+        
+        # Prepare images for API
+        source_b64 = base64.b64encode(context.user_data['source_image']).decode('utf-8')
+        target_b64 = base64.b64encode(target_image_data).decode('utf-8')
+        
+        # Call the face swap API
+        result_image = await call_faceswap_api(source_b64, target_b64)
+        
+        if result_image:
+            # Delete processing message
+            await processing_msg.delete()
+            
+            # Send the result
             await update.message.reply_photo(
-                photo=result_image_url,
-                caption="✅ Success! Here is your swapped image."
+                photo=BytesIO(result_image),
+                caption="✅ Face swap completed! Here's your result! 🎉"
             )
+            logger.info(f"User {user.id}: Face swap successful.")
         else:
-            # This handles cases where the API itself reports a logical error (e.g., "no face found").
-            error_message = api_result.get('message', 'Unknown API error.')
-            logger.error(f"API Logic Error for user {user.id}: {error_message}")
-            await update.message.reply_text(f"❌ The API service returned an error: {error_message}")
-
-    except requests.exceptions.HTTPError as e:
-        # This specifically catches HTTP errors like 401 Unauthorized, 403 Forbidden, 429 Too Many Requests etc.
-        logger.error(f"HTTP Error for user {user.id}: {e}")
-        await update.message.reply_text(f"❌ The API service is unavailable or your key is invalid. (Error: {e.response.status_code})")
-
+            await processing_msg.edit_text(
+                "❌ Face swap failed. Please try with different images that have clear, visible faces."
+            )
+            
     except Exception as e:
-        # This catches all other errors, like network problems or unexpected issues.
-        logger.error(f"An unexpected error occurred for user {user.id}: {e}")
-        await update.message.reply_text("❌ An unexpected error occurred. Please try again by sending /swap.")
+        logger.error(f"Error during face swap for user {user.id}: {e}")
+        await processing_msg.edit_text(
+            "❌ An error occurred during processing. Please try again with /swap."
+        )
     
     finally:
-        # Clean up user data to free memory for the next user.
+        # Clean up user data
         context.user_data.clear()
-
-    # End the conversation.
+    
     return ConversationHandler.END
+
+
+async def call_faceswap_api(source_b64: str, target_b64: str) -> bytes:
+    """
+    Calls the MagicAPI FaceSwap service.
+    You may need to adjust this based on the actual API documentation.
+    """
+    try:
+        headers = {
+            'Authorization': f'Bearer {FACESWAP_API_KEY}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Adjust payload based on actual API requirements
+        payload = {
+            'source_image': f'data:image/jpeg;base64,{source_b64}',
+            'target_image': f'data:image/jpeg;base64,{target_b64}',
+            # Add other parameters as needed
+        }
+        
+        # Alternative payload format (try this if above doesn't work)
+        # payload = {
+        #     'swap_image': source_b64,
+        #     'target_image': target_b64,
+        #     'format': 'base64'
+        # }
+        
+        response = requests.post(
+            FACESWAP_API_URL, 
+            headers=headers, 
+            json=payload,
+            timeout=60  # 60 second timeout
+        )
+        
+        logger.info(f"API Response Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            # Handle different possible response formats
+            if 'result_image' in result:
+                # If response contains base64 image
+                if result['result_image'].startswith('data:image'):
+                    image_data = result['result_image'].split(',')[1]
+                else:
+                    image_data = result['result_image']
+                return base64.b64decode(image_data)
+                
+            elif 'image_url' in result:
+                # If response contains URL to image
+                img_response = requests.get(result['image_url'])
+                return img_response.content
+                
+            elif 'output' in result:
+                # Alternative response format
+                return base64.b64decode(result['output'])
+        
+        else:
+            logger.error(f"API Error: {response.status_code} - {response.text}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        logger.error("API request timed out")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API request failed: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error in API call: {e}")
+        return None
 
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels the current operation."""
     context.user_data.clear()
-    await update.message.reply_text("Operation cancelled. Send /swap to start over.")
+    await update.message.reply_text(
+        "❌ Operation cancelled. Send /swap to start a new face swap!"
+    )
     return ConversationHandler.END
 
 
-def main() -> None:
-    """The main function that sets up and runs the bot."""
-    # Build the application.
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows help information."""
+    help_text = """
+🤖 **FaceSwap Bot Help**
 
-    # Set up the ConversationHandler for the multi-step /swap command.
+**Commands:**
+• /swap - Start a new face swap
+• /help - Show this help message
+• /cancel - Cancel current operation
+
+**How to use:**
+1. Send /swap to start
+2. Send the source image (face to use)
+3. Send the target image (where to place face)
+4. Wait for the magic! ✨
+
+**Tips:**
+• Use clear, high-quality images
+• Make sure faces are clearly visible
+• Avoid blurry or dark images
+• Be patient - processing takes time!
+    """
+    await update.message.reply_text(help_text)
+
+
+def main() -> None:
+    """Main function to run the bot."""
+    if not TELEGRAM_BOT_TOKEN or not FACESWAP_API_KEY:
+        logger.error("Missing required environment variables!")
+        return
+    
+    # Build application
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # Set up conversation handler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("swap", start_command)],
         states={
-            WAITING_FOR_SOURCE_IMAGE: [MessageHandler(filters.PHOTO, received_source_image)],
-            WAITING_FOR_TARGET_IMAGE: [MessageHandler(filters.PHOTO, received_target_image_and_swap)],
+            WAITING_FOR_SOURCE_IMAGE: [
+                MessageHandler(filters.PHOTO, received_source_image)
+            ],
+            WAITING_FOR_TARGET_IMAGE: [
+                MessageHandler(filters.PHOTO, received_target_image_and_swap)
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel_command)],
     )
-
-    # Add the conversation handler to the bot.
+    
+    # Add handlers
     application.add_handler(conv_handler)
-
-    # Add the simple /hello test command for debugging.
+    application.add_handler(CommandHandler("help", help_command))
+    
+    # Test command
     async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("Hello! The bot is responding from the cloud!")
+        await update.message.reply_text("👋 Hello! Bot is running! Use /help for instructions.")
+    
     application.add_handler(CommandHandler("hello", hello))
-
-    # Run the bot. The `drop_pending_updates=True` is the crucial fix for startup stability.
-    print("Bot is running from the cloud...")
+    
+    # Run the bot
+    logger.info("Starting bot...")
     application.run_polling(drop_pending_updates=True)
 
 
