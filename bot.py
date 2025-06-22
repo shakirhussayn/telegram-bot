@@ -11,10 +11,10 @@ from telegram.ext import (
     filters,
 )
 
-# --- CONFIGURATION: READ KEYS FROM THE ENVIRONMENT ---
-# The cloud service will provide these values.
-TELEGRAM_BOT_TOKEN = os.environ.get("8106775001:AAG6jvMoqwVr1mPSJVxlnHRA7Caiwea-o4g")
-FACESWAP_API_KEY = os.environ.get("cmc78va30000qlb042tlt1i01")
+# --- THIS IS THE CORRECT WAY ---
+# Use the NAME of the variable you created on Railway
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+FACESWAP_API_KEY = os.environ.get("FACESWAP_API_KEY")
 
 # --- ALL OTHER CODE REMAINS THE SAME ---
 
