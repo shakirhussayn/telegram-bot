@@ -84,7 +84,8 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END
 
 def main() -> None:
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # The new part, .drop_pending_updates(True), clears old updates to prevent conflicts.
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).drop_pending_updates(True).build()
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("swap", start_command)],
         states={
