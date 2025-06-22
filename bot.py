@@ -18,7 +18,7 @@ FACESWAP_API_KEY = os.environ.get("FACESWAP_API_KEY")
 
 # --- API URL ---
 # This is the last known correct URL for the API service.
-FACESWAP_API_URL = "https://api.magicapi.com/api/v2/faceswap"
+FACESWAP_API_URL = "https://api.market/api/faceswap/v2/image/run"
 
 # --- BOT SETUP ---
 # Standard logging setup to see bot activity.
