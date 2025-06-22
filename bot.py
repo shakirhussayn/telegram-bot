@@ -17,7 +17,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 FACESWAP_API_KEY = os.environ.get("FACESWAP_API_KEY")
 
 # --- API URL ---
-# This is the last known correct URL for the API service.
+# The final, correct URL based on the API Playground documentation you found.
 FACESWAP_API_URL = "https://api.market/api/faceswap/v2/image/run"
 
 # --- BOT SETUP ---
@@ -57,16 +57,15 @@ async def received_target_image_and_swap(update: Update, context: ContextTypes.D
     user = update.message.from_user
     await update.message.reply_text("⏳ Processing... Please wait a moment while the magic happens!")
     try:
-        # Get file paths for both images from Telegram's servers.
-        source_file_id = context.user_data['source_file_id']
-        source_file = await context.bot.get_file(source_file_id)
-        source_image_url = source_file.file_path
+        # Get the file objects first.
+        source_file = await context.bot.get_file(context.user_data['source_file_id'])
+        target_file = await update.message.photo[-1].get_file()
 
-        target_file_id = update.message.photo[-1].file_id
-        target_file = await context.bot.get_file(target_file_id)
+        # The `file_path` attribute provides a full, temporary URL accessible by external services.
+        source_image_url = source_file.file_path
         target_image_url = target_file.file_path
 
-        logger.info(f"User {user.id}: Calling the FaceSwap API.")
+        logger.info(f"User {user.id}: Calling the FaceSwap API with public URLs.")
         
         # Prepare the request for the face swap service.
         headers = {'x-magicapi-key': FACESWAP_API_KEY}
@@ -74,7 +73,7 @@ async def received_target_image_and_swap(update: Update, context: ContextTypes.D
 
         # Make the API call.
         response = requests.post(FACESWAP_API_URL, headers=headers, data=data)
-        response.raise_for_status()  # Checks for HTTP errors like 404 or 500.
+        response.raise_for_status()  # Checks for HTTP errors like 4xx or 5xx.
 
         api_result = response.json()
 
@@ -87,16 +86,23 @@ async def received_target_image_and_swap(update: Update, context: ContextTypes.D
                 caption="✅ Success! Here is your swapped image."
             )
         else:
+            # This handles cases where the API itself reports a logical error (e.g., "no face found").
             error_message = api_result.get('message', 'Unknown API error.')
-            logger.error(f"API Error for user {user.id}: {error_message}")
-            await update.message.reply_text(f"❌ Sorry, the API returned an error: {error_message}")
+            logger.error(f"API Logic Error for user {user.id}: {error_message}")
+            await update.message.reply_text(f"❌ The API service returned an error: {error_message}")
+
+    except requests.exceptions.HTTPError as e:
+        # This specifically catches HTTP errors like 401 Unauthorized, 403 Forbidden, 429 Too Many Requests etc.
+        logger.error(f"HTTP Error for user {user.id}: {e}")
+        await update.message.reply_text(f"❌ The API service is unavailable or your key is invalid. (Error: {e.response.status_code})")
 
     except Exception as e:
+        # This catches all other errors, like network problems or unexpected issues.
         logger.error(f"An unexpected error occurred for user {user.id}: {e}")
         await update.message.reply_text("❌ An unexpected error occurred. Please try again by sending /swap.")
     
     finally:
-        # Clean up user data to free memory.
+        # Clean up user data to free memory for the next user.
         context.user_data.clear()
 
     # End the conversation.
@@ -128,12 +134,12 @@ def main() -> None:
     # Add the conversation handler to the bot.
     application.add_handler(conv_handler)
 
-    # Add the simple /hello test command.
+    # Add the simple /hello test command for debugging.
     async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Hello! The bot is responding from the cloud!")
     application.add_handler(CommandHandler("hello", hello))
 
-    # Run the bot. The `drop_pending_updates=True` is the crucial fix for stability.
+    # Run the bot. The `drop_pending_updates=True` is the crucial fix for startup stability.
     print("Bot is running from the cloud...")
     application.run_polling(drop_pending_updates=True)
 
