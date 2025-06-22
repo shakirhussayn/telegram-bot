@@ -373,12 +373,34 @@ async def received_target_image_and_swap(update: Update, context: ContextTypes.D
             output = result['output']
             result_image_url = None
             
+            # --- START OF CORRECTED BLOCK ---
             if isinstance(output, str):
                 if output.startswith('http'):
+                    # Case 1: The API returns a direct URL.
                     result_image_url = output
+                elif output.startswith('data:image/jpeg;base64,'):
+                    # Case 2: The API returns the Base64 image data directly.
+                    logger.info("Output is Base64 data. Decoding and sending...")
+                    base64_string = output.split(',')[1]
+                    image_data = base64.b64decode(base64_string)
+                    image_stream = BytesIO(image_data)
+                    
+                    # Send the photo directly and end the function here.
+                    await processing_msg.delete()
+                    await update.message.reply_photo(
+                        photo=image_stream,
+                        caption="✅ Face swap completed successfully! 🎉"
+                    )
+                    logger.info(f"User {user.id}: Face swap successful from Base64.")
+                    # Clean up and exit since the job is done.
+                    context.user_data.clear()
+                    return ConversationHandler.END
                 else:
-                    logger.info(f"Output is string but not URL: {output[:100]}...")
+                    # Case 3: The output is an unknown string format.
+                    logger.info(f"Output is a string but not a known format: {output[:100]}...")
+
             elif isinstance(output, dict):
+                # This part remains the same, to handle if the API returns a JSON object.
                 for key in ['image_url', 'url', 'result_url', 'output_url']:
                     if key in output:
                         result_image_url = output[key]
@@ -386,6 +408,7 @@ async def received_target_image_and_swap(update: Update, context: ContextTypes.D
                 
                 if not result_image_url:
                     logger.error(f"No image URL found in output dict: {output}")
+            # --- END OF CORRECTED BLOCK ---
             
             if result_image_url:
                 try:
